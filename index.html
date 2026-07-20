@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Moloco Spheres</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="appwrap">
+  <div id="sidebar">
+
+    <div class="section">
+      <h2>Arrangement</h2>
+      <div class="ctrlbtns">
+        <button id="regen">New arrangement</button>
+      </div>
+      <div class="ctrlbtns">
+        <button id="modebtn">Switch to sphere network</button>
+      </div>
+      <div class="ctrlbtns">
+        <button id="gridcontentbtn">Grid content: single</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>View</h2>
+      <div class="ctrlbtns">
+        <button id="zoomIn">Zoom +</button>
+        <button id="zoomOut">Zoom &minus;</button>
+      </div>
+      <div class="ctrlbtns">
+        <button id="circlabelbtn">Hide circle labels</button>
+        <button id="vertlabelbtn">Hide vertex labels</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Overlays</h2>
+      <div class="ctrlbtns">
+        <button id="planesbtn">Show radical planes</button>
+      </div>
+      <div class="ctrlbtns">
+        <button id="normalsbtn">Show normal vectors</button>
+      </div>
+      <div class="ctrlbtns">
+        <button id="satbtn">Show satellite spheres</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Parameters</h2>
+      <div class="row">
+        <label>Circles per sphere: <span id="lblCircleCount">6</span>
+          <input type="range" id="sliderCircleCount" min="3" max="14" value="6"></label>
+      </div>
+      <div class="row">
+        <label>Spheres in network: <span id="lblSphereCount">6</span>
+          <input type="range" id="sliderSphereCount" min="4" max="11" value="6"></label>
+      </div>
+      <div class="row">
+        <label>Grid size: <span id="lblGridSize">3&times;3</span>
+          <input type="range" id="sliderGridSize" min="2" max="4" value="3"></label>
+      </div>
+      <div class="row">
+        <label>Radical plane density: <span id="lblPlaneDensity">40%</span>
+          <input type="range" id="sliderPlaneDensity" min="0" max="100" value="40"></label>
+      </div>
+      <div class="row">
+        <label>Satellite density: <span id="lblSatDensity">60%</span>
+          <input type="range" id="sliderSatDensity" min="0" max="100" value="60"></label>
+      </div>
+      <div class="row">
+        <label>Stroke width: <span id="lblStrokeWidth">60%</span>
+          <input type="range" id="sliderStrokeWidth" min="20" max="200" value="60"></label>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Info</h2>
+      <div id="stats"></div>
+      <div id="legend"></div>
+    </div>
+
+  </div>
+
+  <div id="stage">
+    <canvas id="base"></canvas>
+  </div>
+</div>
+<script src="script.js"></script>
+</body>
+</html>

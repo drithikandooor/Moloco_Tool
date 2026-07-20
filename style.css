@@ -1,0 +1,42 @@
+/* PP Kyoto is a commercial typeface (Pangram Pangram) -- we can't legally embed
+   the font file without a license. This references it by name so it's used
+   automatically if you have it installed locally or add your own @font-face
+   pointing at a licensed woff2, with a serif fallback otherwise. */
+:root{ --ink:#5B4E49; --paper:#FDFDFC; --font: 'PP Kyoto', Georgia, 'Times New Roman', serif; }
+
+html,body{background:var(--paper);color:var(--ink);font-family:var(--font);margin:0;padding:0;height:100%;overflow:hidden;}
+
+#appwrap{display:flex;align-items:flex-start;gap:24px;width:100%;height:100vh;box-sizing:border-box;padding:16px;overflow:hidden;}
+
+#sidebar{width:300px;flex:0 0 300px;font-size:13px;height:100%;overflow-y:auto;padding-right:6px;}
+
+.section{border:1px solid var(--ink);border-radius:2px;margin-bottom:14px;padding:10px 12px 12px;}
+.section h2{font-size:11px;text-transform:uppercase;letter-spacing:0.08em;font-weight:normal;margin:0 0 8px 0;opacity:0.6;border-bottom:1px solid var(--ink);padding-bottom:5px;}
+
+#stage{position:relative;border:1px solid var(--ink);cursor:grab;flex:0 0 auto;}
+#stage.dragging{cursor:grabbing;}
+#base{position:absolute;top:0;left:0;width:100%;height:100%;}
+
+#stats{font-size:12px;line-height:1.7;white-space:pre;}
+#legend{font-size:11.5px;line-height:1.7;opacity:0.8;margin-top:8px;}
+
+button{font-family:inherit;font-size:13px;padding:6px 12px;border:1px solid var(--ink);background:var(--paper);color:var(--ink);cursor:pointer;}
+button:hover{background:var(--ink);color:var(--paper);}
+button:disabled{opacity:0.35;cursor:not-allowed;background:var(--paper);color:var(--ink);}
+
+.row{margin-top:10px;font-size:12px;}
+.row:first-child{margin-top:0;}
+.row input[type="range"]{vertical-align:middle;width:100%;margin-top:2px;accent-color:var(--ink);}
+.row input[type="range"]:disabled{opacity:0.35;}
+.row label{display:block;}
+
+.ctrlbtns{margin-bottom:8px;}
+.ctrlbtns:last-child{margin-bottom:0;}
+.ctrlbtns button{margin-right:8px;margin-bottom:6px;}
+
+@media (max-width: 980px){
+  html,body{overflow:auto;height:auto;}
+  #appwrap{flex-direction:column;align-items:stretch;height:auto;overflow:visible;}
+  #sidebar{width:auto;flex:0 0 auto;height:auto;overflow:visible;}
+  #stage{margin:0 auto;}
+}
