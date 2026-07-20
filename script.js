@@ -15,7 +15,7 @@ let zoomLevel = 1;
 const EPS = 6e-3;
 const YELLOW = '#FFEF74';
 const INK = '#5B4E49';
-const PAPER = '#FDFDFC';
+const PAPER = '#F9F8EF';
 function inkA(a){ return `rgba(91,78,73,${a})`; }
 function LW(base){ return base * ctrlStrokeScale; }
 

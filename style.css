@@ -2,7 +2,7 @@
    the font file without a license. This references it by name so it's used
    automatically if you have it installed locally or add your own @font-face
    pointing at a licensed woff2, with a serif fallback otherwise. */
-:root{ --ink:#5B4E49; --paper:#FDFDFC; --font: 'PP Kyoto', Georgia, 'Times New Roman', serif; }
+:root{ --ink:#5B4E49; --paper:#F9F8EF; --font: 'PP Kyoto', Georgia, 'Times New Roman', serif; }
 
 html,body{background:var(--paper);color:var(--ink);font-family:var(--font);margin:0;padding:0;height:100%;overflow:hidden;}
 
