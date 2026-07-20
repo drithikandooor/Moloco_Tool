@@ -691,10 +691,103 @@ window.addEventListener('resize', ()=>{
   resizeTimer = setTimeout(()=>{ setupCanvas(); redraw(); }, 120);
 });
 
+// ---- SVG export: a fake "context" implementing only the canvas methods this
+// file actually uses, so the SAME drawing functions produce an SVG instead of
+// duplicating any geometry logic. ----
+class SVGRecorder {
+  constructor(){
+    this.elements = [];
+    this._path = [];
+    this._strokeStyle = '#000';
+    this._fillStyle = '#000';
+    this._lineWidth = 1;
+    this._dash = [];
+    this._font = '10px Georgia';
+    this._fontSize = 10;
+  }
+  set strokeStyle(v){ this._strokeStyle = v; }
+  get strokeStyle(){ return this._strokeStyle; }
+  set fillStyle(v){ this._fillStyle = v; }
+  get fillStyle(){ return this._fillStyle; }
+  set lineWidth(v){ this._lineWidth = v; }
+  get lineWidth(){ return this._lineWidth; }
+  set font(v){
+    this._font = v;
+    const m = /([\d.]+)px/.exec(v);
+    this._fontSize = m ? parseFloat(m[1]) : 10;
+  }
+  get font(){ return this._font; }
+  setTransform(){ /* no-op: SVG records logical coordinates directly */ }
+  setLineDash(arr){ this._dash = arr || []; }
+  beginPath(){ this._path = []; }
+  moveTo(x,y){ this._path.push(`M ${x.toFixed(2)} ${y.toFixed(2)}`); }
+  lineTo(x,y){ this._path.push(`L ${x.toFixed(2)} ${y.toFixed(2)}`); }
+  closePath(){ this._path.push('Z'); }
+  arc(x,y,r,a0,a1){
+    // Every arc() call in this file draws a full circle (0..2*PI); represent
+    // it as two half-circle SVG arcs, which SVG paths require for a full loop.
+    const x0 = x-r, x1 = x+r;
+    this._path.push(`M ${x0.toFixed(2)} ${y.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${x1.toFixed(2)} ${y.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${x0.toFixed(2)} ${y.toFixed(2)}`);
+  }
+  _dashAttr(){ return this._dash.length ? ` stroke-dasharray="${this._dash.join(',')}"` : ''; }
+  stroke(){
+    if (!this._path.length) return;
+    this.elements.push(`<path d="${this._path.join(' ')}" fill="none" stroke="${this._strokeStyle}" stroke-width="${this._lineWidth}"${this._dashAttr()} />`);
+  }
+  fill(){
+    if (!this._path.length) return;
+    this.elements.push(`<path d="${this._path.join(' ')}" fill="${this._fillStyle}" stroke="none" />`);
+  }
+  fillRect(x,y,w,h){
+    this.elements.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${this._fillStyle}" />`);
+  }
+  clearRect(){ /* no-op: each export starts from a blank SVG */ }
+  fillText(text,x,y){
+    const esc = String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    this.elements.push(`<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" font-family="Georgia, 'Times New Roman', serif" font-size="${this._fontSize}" fill="${this._fillStyle}">${esc}</text>`);
+  }
+}
+
+function downloadBlob(filename, data, mime){
+  const blob = new Blob([data], {type:mime});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.download = filename;
+  link.href = url;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(()=> URL.revokeObjectURL(url), 1000);
+}
+
+function exportPNG(){
+  const canvas = document.getElementById('base');
+  const link = document.createElement('a');
+  link.download = 'circle-arrangement.png';
+  link.href = canvas.toDataURL('image/png');
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function exportSVG(){
+  const rec = new SVGRecorder();
+  renderSceneToContext(rec);
+  const svg =
+`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}" width="${SIZE}" height="${SIZE}">
+${rec.elements.join('\n')}
+</svg>`;
+  downloadBlob('circle-arrangement.svg', svg, 'image/svg+xml');
+}
+
+function renderSceneToContext(ctx){
+  if (sceneMode === 'single') drawSingle(ctx);
+  else if (sceneMode === 'network') drawNetwork(ctx);
+  else drawGrid(ctx);
+}
+
 function redraw(){
-  if (sceneMode === 'single') drawSingle(mainCtx);
-  else if (sceneMode === 'network') drawNetwork(mainCtx);
-  else drawGrid(mainCtx);
+  renderSceneToContext(mainCtx);
 }
 
 function regen(){
@@ -843,6 +936,9 @@ stage.addEventListener('touchmove', e=>{
   }
 }, {passive:true});
 stage.addEventListener('touchend', ()=>{ pinchStartDist = null; });
+
+document.getElementById('exportPngBtn').addEventListener('click', exportPNG);
+document.getElementById('exportSvgBtn').addEventListener('click', exportSVG);
 
 setupCanvas();
 updateControlAvailability();
