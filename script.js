@@ -4,20 +4,30 @@ let flagNormals = false;
 let flagCircleLabels = true;
 let flagVertexLabels = true;
 let flagSatellites = false;
+let flagSolidLines = false;
+let flagShowIntersectionColor = true;
+let flagCenterLines = true;
 let ctrlCircleCount = 6;
 let ctrlSphereCount = 6;
 let ctrlGridSize = 3;
 let ctrlPlaneDensity = 0.4;
 let ctrlSatelliteDensity = 0.6;
-let ctrlStrokeScale = 0.6;
+let ctrlStrokeScale = 1.0;
 let gridContentMode = 'single';
 let zoomLevel = 1;
 const EPS = 6e-3;
-const YELLOW = '#FFEF74';
+const YELLOW = '#ECD632';
 const INK = '#5B4E49';
 const PAPER = '#F9F8EF';
+const SOLID_GRAY = '#9C948E';
 function inkA(a){ return `rgba(91,78,73,${a})`; }
 function LW(base){ return base * ctrlStrokeScale; }
+// Round-dot dashed style: a near-zero dash length with a round line cap draws
+// isolated circular dots rather than little dashes (dash:1 / gap:5 feel).
+function dotDash(gapUnits){ return flagSolidLines ? [] : [0.001, LW(gapUnits)]; }
+// When "solid lines" mode is on, anything that would have been dotted/dashed
+// is drawn as a plain solid gray stroke instead.
+function dashColor(normalColor){ return flagSolidLines ? SOLID_GRAY : normalColor; }
 
 function dot(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
 function cross(a,b){return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];}
@@ -135,14 +145,27 @@ function attachSatelliteData(vertexList){
   }
 }
 
+// Satellite anchors are sampled along the actual circumference of random
+// circles in the sphere -- spread out generally, not confined to the real
+// intersection points -- each carrying its own tiny circle arrangement.
+function generateSatelliteAnchors(circleList, count){
+  const anchors = [];
+  if (!circleList.length) return anchors;
+  for (let k=0;k<count;k++){
+    const c = pick(circleList);
+    const theta = Math.random()*2*Math.PI;
+    anchors.push({p3: pointOnCircle(c, theta)});
+  }
+  attachSatelliteData(anchors);
+  return anchors;
+}
+
 function proj(ocx,ocy,oR,p3){ return [ocx + p3[0]*oR, ocy - p3[1]*oR]; }
 
 function labelFor(c, idx){
   if (!c.tag) return 'C'+idx;
   if (c.tag.indexOf('nbr-')===0) return 'C\u2192S'+c.tag.slice(4);
-  const map = {tangent:'C'+idx+' (tangent)', concurrent:'C'+idx+' (concurrent)',
-    'forced-polar':'C'+idx+' (polar)', 'forced-bipolar':'C'+idx+' (bipolar)'};
-  return map[c.tag] || ('C'+idx);
+  return 'C'+idx;
 }
 
 function letterLabel(n){
@@ -196,15 +219,19 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
   const highlightSet = opts.highlightSet || new Set();
 
   // Highlight fills first -- bottom layer.
-  vertexList.forEach((v, vi) => {
-    if (!highlightSet.has(vi)) return;
-    const p3 = rotFn(v.p3);
-    if (p3[2] < 0) return;
-    const partner = vertexList.find((w,wi)=> wi!==vi && w.i===v.i && w.j===v.j);
-    if (partner) fillLensBetween(ctx, ocx,ocy,oR, rotFn, circleList[v.i], circleList[v.j], v.p3, partner.p3);
-    else fillTangentSpot(ctx, ocx,ocy,oR, rotFn, v.p3);
-  });
+  ctx.layer = 'fills';
+  if (flagShowIntersectionColor){
+    vertexList.forEach((v, vi) => {
+      if (!highlightSet.has(vi)) return;
+      const p3 = rotFn(v.p3);
+      if (p3[2] < 0) return;
+      const partner = vertexList.find((w,wi)=> wi!==vi && w.i===v.i && w.j===v.j);
+      if (partner) fillLensBetween(ctx, ocx,ocy,oR, rotFn, circleList[v.i], circleList[v.j], v.p3, partner.p3);
+      else fillTangentSpot(ctx, ocx,ocy,oR, rotFn, v.p3);
+    });
+  }
 
+  ctx.layer = 'outline';
   ctx.beginPath();
   ctx.arc(ocx,ocy,oR,0,2*Math.PI);
   ctx.strokeStyle = INK;
@@ -216,39 +243,54 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
   const typeCounts = {normal:0, threaded:0, 'north-polar':0, 'south-polar':0, bipolar:0};
   const labelPts = [];
   const planeCount = Math.round((opts.planeDensity != null ? opts.planeDensity : 1) * circleList.length);
-  const satCount = Math.round((opts.satelliteDensity != null ? opts.satelliteDensity : 1) * vertexList.length);
 
   circleList.forEach((c, idx) => {
     typeCounts[c.type] = (typeCounts[c.type]||0) + 1;
     const isPolarish = (c.type==='north-polar' || c.type==='south-polar');
     let prev = null, prevZ = null;
+    let runPts = [];
+    let runKey = null; // 'hidden' | 'threaded' | 'polar' | 'normal'
+    const flushRun = () => {
+      if (runPts.length < 2){ runPts = []; return; }
+      const isDashedRun = runKey !== 'normal';
+      ctx.layer = 'arcs';
+      ctx.beginPath();
+      ctx.moveTo(runPts[0][0], runPts[0][1]);
+      for (let i=1;i<runPts.length;i++) ctx.lineTo(runPts[i][0], runPts[i][1]);
+      ctx.strokeStyle = isDashedRun ? dashColor(INK) : INK;
+      ctx.lineWidth = LW(isDashedRun ? 1.5 : (c.type==='bipolar' ? 1.1 : 0.7));
+      if (runKey==='hidden') ctx.setLineDash(dotDash(4));
+      else if (runKey==='threaded') ctx.setLineDash(dotDash(5));
+      else if (runKey==='polar') ctx.setLineDash(dotDash(6));
+      else ctx.setLineDash([]);
+      ctx.stroke();
+      runPts = [];
+    };
     for (let k=0;k<=N;k++){
       const theta = (k/N)*2*Math.PI;
       const p3 = rotFn(pointOnCircle(c, theta));
       const scr = proj(ocx,ocy,oR,p3);
       if (prev){
         const visible = (p3[2] >= 0) && (prevZ >= 0);
-        ctx.beginPath();
-        ctx.moveTo(prev[0],prev[1]);
-        ctx.lineTo(scr[0],scr[1]);
-        ctx.strokeStyle = INK;
-        ctx.lineWidth = LW(c.type==='bipolar' ? 1.1 : 0.7);
-        if (!visible) ctx.setLineDash([1.3,2.6]);
-        else if (c.type==='threaded') ctx.setLineDash([4.5,1.8,1,1.8]);
-        else if (isPolarish) ctx.setLineDash([5.5,2.6]);
-        else ctx.setLineDash([]);
-        ctx.stroke();
+        const baseKey = c.type==='threaded' ? 'threaded' : (isPolarish ? 'polar' : 'normal');
+        const key = (flagSolidLines || visible) ? baseKey : 'hidden';
+        if (runKey !== null && key !== runKey) flushRun();
+        if (runPts.length === 0) runPts.push(prev);
+        runPts.push(scr);
+        runKey = key;
       }
       prev = scr; prevZ = p3[2];
     }
-    if (c.type === 'threaded' && opts.showThreadTicks !== false){
+    flushRun();
+    if (c.type === 'threaded' && opts.showThreadTicks !== false && flagCenterLines){
       const centerScr = proj(ocx,ocy,oR, rotFn(scale(c.n, c.h)));
+      ctx.layer = 'centerlines';
       ctx.beginPath();
       ctx.moveTo(ocx,ocy);
       ctx.lineTo(centerScr[0], centerScr[1]);
-      ctx.strokeStyle = inkA(0.4);
-      ctx.lineWidth = LW(0.5);
-      ctx.setLineDash([1,2]);
+      ctx.strokeStyle = dashColor(inkA(0.62));
+      ctx.lineWidth = LW(1.3);
+      ctx.setLineDash(dotDash(4));
       ctx.stroke();
     }
 
@@ -257,33 +299,25 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
     if (wantPlane || wantNormal){
       const foot = scale(c.n, c.h);
       if (wantPlane){
-        const nearW = c.rho * 0.55, farW = c.rho * 1.5;
-        const nearD = c.rho * 0.15, farD = c.rho * 2.6 + 0.5;
+        const nearW = c.rho * 0.55, farW = c.rho * 1.1;
+        const nearD = c.rho * 0.15, farD = c.rho * 1.1 + 0.15;
         const nearA = add(foot, add(scale(c.u,nearD), scale(c.v, nearW)));
         const farA  = add(foot, add(scale(c.u,farD),  scale(c.v, farW)));
         const farB  = add(foot, add(scale(c.u,farD),  scale(c.v,-farW)));
         const nearB = add(foot, add(scale(c.u,nearD), scale(c.v,-nearW)));
         const corners = [nearA, farA, farB, nearB].map(p => proj(ocx,ocy,oR, rotFn(p)));
+        ctx.layer = 'planes';
         ctx.beginPath();
         ctx.moveTo(corners[0][0],corners[0][1]);
         for (let k=1;k<4;k++) ctx.lineTo(corners[k][0],corners[k][1]);
         ctx.closePath();
-        ctx.strokeStyle = inkA(0.55);
+        ctx.strokeStyle = inkA(0.75);
         ctx.lineWidth = LW(0.5);
         ctx.setLineDash([]);
         ctx.stroke();
-        const beyondA = add(foot, add(scale(c.u, farD*1.15), scale(c.v, farW*1.12)));
-        const beyondB = add(foot, add(scale(c.u, farD*1.15), scale(c.v,-farW*1.12)));
-        const beyondAScr = proj(ocx,ocy,oR, rotFn(beyondA));
-        const beyondBScr = proj(ocx,ocy,oR, rotFn(beyondB));
-        ctx.beginPath();
-        ctx.moveTo(corners[1][0],corners[1][1]); ctx.lineTo(beyondAScr[0],beyondAScr[1]);
-        ctx.moveTo(corners[2][0],corners[2][1]); ctx.lineTo(beyondBScr[0],beyondBScr[1]);
-        ctx.setLineDash([1,3]);
-        ctx.stroke();
-        ctx.setLineDash([]);
         if (opts.showLabels !== false){
-          ctx.font = '9px Georgia';
+          ctx.layer = 'labels';
+          ctx.font = "9px 'Test Pitch', Georgia, serif";
           ctx.fillStyle = INK;
           const midFarScr = proj(ocx,ocy,oR, rotFn(add(foot, scale(c.u, farD))));
           ctx.fillText('RF\u2080,'+idx, midFarScr[0]+3, midFarScr[1]-3);
@@ -293,6 +327,7 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
         const tip = add(foot, scale(c.n, c.rho*0.9 + 0.4));
         const footScr = proj(ocx,ocy,oR, rotFn(foot));
         const tipScr = proj(ocx,ocy,oR, rotFn(tip));
+        ctx.layer = 'normals';
         ctx.beginPath();
         ctx.moveTo(footScr[0],footScr[1]);
         ctx.lineTo(tipScr[0],tipScr[1]);
@@ -308,7 +343,8 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
         ctx.lineTo(tipScr[0]-ah*Math.cos(ang+0.4), tipScr[1]-ah*Math.sin(ang+0.4));
         ctx.stroke();
         if (opts.showLabels !== false){
-          ctx.font = '9px Georgia';
+          ctx.layer = 'labels';
+          ctx.font = "9px 'Test Pitch', Georgia, serif";
           ctx.fillStyle = INK;
           ctx.fillText('n', tipScr[0]+4, tipScr[1]-2);
         }
@@ -324,13 +360,14 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
   });
   ctx.setLineDash([]);
 
-  if (opts.showMeridian){
+  if (opts.showMeridian && flagCenterLines){
+    ctx.layer = 'centerlines';
     ctx.beginPath();
     ctx.moveTo(ocx,ocy);
     ctx.lineTo(ocx + oR*Math.cos(opts.meridianAngle), ocy + oR*Math.sin(opts.meridianAngle));
-    ctx.strokeStyle = inkA(0.45);
-    ctx.lineWidth = LW(0.7);
-    ctx.setLineDash([2,4]);
+    ctx.strokeStyle = dashColor(inkA(0.65));
+    ctx.lineWidth = LW(1.4);
+    ctx.setLineDash(dotDash(4.5));
     ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -339,36 +376,56 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
   vertexList.forEach(v=>{ if (v.tangent) tangentPairs++; });
   totalSingular = vertexList.length;
 
+  ctx.layer = 'vertices';
   vertexList.forEach((v, vi) => {
     const p3 = rotFn(v.p3);
     if (p3[2] < 0) return;
     const scr = proj(ocx,ocy,oR,p3);
 
-    if (opts.satellites && (vi < satCount) && v.satCircles && v.satCircles.length){
-      const satR = oR * v.satRFrac;
-      const satHighlight = (v.satHighlight != null) ? new Set([v.satHighlight]) : new Set();
-      renderSphereView(ctx, scr[0], scr[1], satR, v.satCircles, {
-        rotate: rotFn, showMeridian:false, arcSamples:50,
-        showLabels:false, showVertexLabels:false, satellites:false,
-        vertexList: v.satVertices, highlightSet: satHighlight,
-        dotR: Math.max(1, (opts.dotR||2.2)*0.55)
-      });
-    }
-
+    ctx.layer = 'vertices';
     ctx.beginPath();
     ctx.arc(scr[0],scr[1], opts.dotR || 2.2, 0,2*Math.PI);
     ctx.fillStyle = INK;
     ctx.fill();
 
     if (opts.showVertexLabels !== false){
-      ctx.font = (opts.vertexLabelSize||9) + 'px Georgia';
+      ctx.layer = 'labels';
+      ctx.font = (opts.vertexLabelSize||9) + "px 'Test Pitch', Georgia, serif";
       ctx.fillStyle = INK;
       ctx.fillText(letterLabel(vi), scr[0]+5, scr[1]-4);
     }
   });
 
+  if (opts.satellites && opts.satelliteAnchors){
+    const anchors = opts.satelliteAnchors;
+    const satShowCount = Math.round((opts.satelliteDensity != null ? opts.satelliteDensity : 1) * anchors.length);
+    anchors.forEach((anchor, ai) => {
+      if (ai >= satShowCount) return;
+      const p3 = rotFn(anchor.p3);
+      if (p3[2] < 0) return;
+      const scr = proj(ocx,ocy,oR,p3);
+      if (anchor.satCircles && anchor.satCircles.length){
+        const satR = oR * anchor.satRFrac;
+        const satHighlight = (anchor.satHighlight != null) ? new Set([anchor.satHighlight]) : new Set();
+        renderSphereView(ctx, scr[0], scr[1], satR, anchor.satCircles, {
+          rotate: rotFn, showMeridian:false, arcSamples:50,
+          showLabels:false, showVertexLabels:false, satellites:false,
+          vertexList: anchor.satVertices, highlightSet: satHighlight,
+          dotR: Math.max(1, (opts.dotR||2.2)*0.55)
+        });
+      }
+      // center dot for the satellite, regardless of whether it sits on a real vertex
+      ctx.layer = 'vertices';
+      ctx.beginPath();
+      ctx.arc(scr[0],scr[1], (opts.dotR||2.2)*0.85, 0, 2*Math.PI);
+      ctx.fillStyle = INK;
+      ctx.fill();
+    });
+  }
+
   if (opts.showLabels !== false){
-    ctx.font = (opts.labelFontSize||9.5) + 'px Georgia';
+    ctx.layer = 'labels';
+    ctx.font = (opts.labelFontSize||9.5) + "px 'Test Pitch', Georgia, serif";
     ctx.fillStyle = INK;
     for (const lp of labelPts){
       const scr = proj(ocx,ocy,oR,lp.p3);
@@ -379,7 +436,8 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
   }
 
   if (opts.label){
-    ctx.font = (opts.labelSize||13) + 'px Georgia';
+    ctx.layer = 'labels';
+    ctx.font = (opts.labelSize||13) + "px 'Test Pitch', Georgia, serif";
     ctx.fillStyle = INK;
     ctx.fillText(opts.label, ocx-6, ocy-oR-8);
   }
@@ -428,11 +486,12 @@ function buildSingleArrangement(circleCount){
     }
   }
   const vl = computeVertexList(cs);
-  attachSatelliteData(vl);
   const frontIdxs = vl.map((v,i)=>i).filter(i=> rot(vl[i].p3)[2] >= 0);
   const pool = frontIdxs.length ? frontIdxs : vl.map((v,i)=>i);
   const highlightIdx = pool.length ? pick(pool) : null;
-  return {circles:cs, notes:notesLocal, vertexList:vl, highlightIdx};
+  const anchorCount = Math.min(60, Math.max(6, Math.round(cs.length * 4)));
+  const satelliteAnchors = generateSatelliteAnchors(cs, anchorCount);
+  return {circles:cs, notes:notesLocal, vertexList:vl, highlightIdx, satelliteAnchors};
 }
 
 function buildNetworkArrangement(sphereCount){
@@ -463,10 +522,10 @@ function buildNetworkArrangement(sphereCount){
       }
     }
   }
-  const vertexLists = localCircles.map(cl => {
-    const vl = computeVertexList(cl);
-    attachSatelliteData(vl);
-    return vl;
+  const vertexLists = localCircles.map(cl => computeVertexList(cl));
+  const satelliteAnchorLists = localCircles.map(cl => {
+    const anchorCount = Math.min(60, Math.max(6, Math.round(cl.length * 4)));
+    return generateSatelliteAnchors(cl, anchorCount);
   });
   const pool = [];
   vertexLists.forEach((vl,si)=>{ vl.forEach((v,vi)=>{ if (rot(v.p3)[2] >= 0) pool.push({si,vi}); }); });
@@ -476,7 +535,7 @@ function buildNetworkArrangement(sphereCount){
     [pool[k],pool[j]] = [pool[j],pool[k]];
   }
   const highlights = pool.slice(0, Math.min(4, pool.length));
-  return {spheres, localCircles, edges, centroid, vertexLists, highlights};
+  return {spheres, localCircles, edges, centroid, vertexLists, highlights, satelliteAnchorLists};
 }
 
 function renderNetworkInBox(ctx, data, boxCx, boxCy, boxHalfW, boxHalfH, opts){
@@ -498,11 +557,12 @@ function renderNetworkInBox(ctx, data, boxCx, boxCy, boxHalfW, boxHalfH, opts){
 
   for (const e of data.edges){
     const A = layout[e.i], B = layout[e.j];
+    ctx.layer = 'edges';
     ctx.beginPath();
     ctx.moveTo(A.x,A.y); ctx.lineTo(B.x,B.y);
-    ctx.strokeStyle = inkA(0.4);
-    ctx.lineWidth = LW(0.5);
-    ctx.setLineDash([2,3]);
+    ctx.strokeStyle = dashColor(inkA(0.62));
+    ctx.lineWidth = LW(1.3);
+    ctx.setLineDash(dotDash(4.5));
     ctx.stroke();
   }
   ctx.setLineDash([]);
@@ -517,7 +577,7 @@ function renderNetworkInBox(ctx, data, boxCx, boxCy, boxHalfW, boxHalfH, opts){
       showPlanes:flagPlanes, showNormals:flagNormals, planeDensity:ctrlPlaneDensity,
       showLabels:opts.showLabels!==false, showVertexLabels:opts.showVertexLabels!==false,
       satellites:flagSatellites, satelliteDensity:ctrlSatelliteDensity,
-      vertexList:data.vertexLists[i], highlightSet:hset,
+      vertexList:data.vertexLists[i], highlightSet:hset, satelliteAnchors:data.satelliteAnchorLists[i],
       label: opts.showLabels!==false ? ('S'+i) : null,
       labelSize:opts.labelSize||11, dotR:opts.dotR||1.6, labelFontSize:opts.labelFontSize||8.5
     });
@@ -536,18 +596,20 @@ let cx = 320, cy = 320, baseR = 250;
 function recomputeDerivedSizes(){
   cx = SIZE/2; cy = SIZE/2; baseR = SIZE*0.39;
 }
-let circles = [], notes = [], singleVertices = [], singleHighlightIdx = null;
+let circles = [], notes = [], singleVertices = [], singleHighlightIdx = null, singleSatelliteAnchors = [];
 
 function generateSingle(){
   const d = buildSingleArrangement(ctrlCircleCount);
   circles = d.circles; notes = d.notes; singleVertices = d.vertexList; singleHighlightIdx = d.highlightIdx;
+  singleSatelliteAnchors = d.satelliteAnchors;
 }
 
 let staticAngle = 0;
 
 function drawSingle(ctx){
   ctx.clearRect(0,0,SIZE,SIZE);
-  ctx.fillStyle = PAPER; ctx.fillRect(0,0,SIZE,SIZE);
+  ctx.layer = 'background'; ctx.fillStyle = PAPER; ctx.fillRect(0,0,SIZE,SIZE);
+  ctx.lineCap = 'round';
 
   const R = baseR * zoomLevel;
   const highlightSet = flagSatellites ? new Set() : (singleHighlightIdx!=null ? new Set([singleHighlightIdx]) : new Set());
@@ -556,20 +618,40 @@ function drawSingle(ctx){
     showPlanes:flagPlanes, showNormals:flagNormals, planeDensity:ctrlPlaneDensity,
     showLabels:flagCircleLabels, showVertexLabels:flagVertexLabels,
     satellites:flagSatellites, satelliteDensity:ctrlSatelliteDensity,
-    vertexList:singleVertices, highlightSet
+    vertexList:singleVertices, highlightSet, satelliteAnchors:singleSatelliteAnchors
   });
 
   for (const note of notes){
     const p3 = rot(note.p);
     if (p3[2] < 0) continue;
     const scr = proj(cx,cy,R,p3);
+    ctx.layer = 'notes';
     ctx.beginPath();
     ctx.arc(scr[0],scr[1],4.2,0,2*Math.PI);
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = LW(0.5);
-    ctx.setLineDash([1,2]);
+    ctx.strokeStyle = dashColor(INK);
+    ctx.lineWidth = LW(1.3);
+    ctx.setLineDash(dotDash(4));
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+
+  if (planePoints.length){
+    const pts = planePoints.map(a => [cx + R*Math.cos(a), cy - R*Math.sin(a)]);
+    ctx.layer = 'userplane';
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let k=1;k<pts.length;k++) ctx.lineTo(pts[k][0], pts[k][1]);
+    if (pts.length >= 3) ctx.closePath();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = LW(1.2);
+    ctx.setLineDash([]);
+    ctx.stroke();
+    for (const p of pts){
+      ctx.beginPath();
+      ctx.arc(p[0],p[1],3,0,2*Math.PI);
+      ctx.fillStyle = INK;
+      ctx.fill();
+    }
   }
 
   document.getElementById('stats').textContent =
@@ -594,7 +676,8 @@ function generateNetwork(){
 
 function drawNetwork(ctx){
   ctx.clearRect(0,0,SIZE,SIZE);
-  ctx.fillStyle = PAPER; ctx.fillRect(0,0,SIZE,SIZE);
+  ctx.layer = 'background'; ctx.fillStyle = PAPER; ctx.fillRect(0,0,SIZE,SIZE);
+  ctx.lineCap = 'round';
   const totals = renderNetworkInBox(ctx, netData, cx, cy, SIZE*0.47, SIZE*0.47, {
     arcSamples:150, showLabels:flagCircleLabels, showVertexLabels:flagVertexLabels, zoom:zoomLevel
   });
@@ -628,7 +711,8 @@ function generateGrid(){
 
 function drawGrid(ctx){
   ctx.clearRect(0,0,SIZE,SIZE);
-  ctx.fillStyle = PAPER; ctx.fillRect(0,0,SIZE,SIZE);
+  ctx.layer = 'background'; ctx.fillStyle = PAPER; ctx.fillRect(0,0,SIZE,SIZE);
+  ctx.lineCap = 'round';
   const n = ctrlGridSize;
   const cellW = SIZE/n, cellH = SIZE/n;
   for (let idx=0; idx<gridData.length; idx++){
@@ -644,7 +728,7 @@ function drawGrid(ctx){
         showPlanes:flagPlanes, showNormals:flagNormals, planeDensity:ctrlPlaneDensity,
         showLabels:flagCircleLabels, showVertexLabels:flagVertexLabels,
         satellites:flagSatellites, satelliteDensity:ctrlSatelliteDensity,
-        vertexList:d.vertexList, highlightSet:hset, dotR:1.3
+        vertexList:d.vertexList, highlightSet:hset, satelliteAnchors:d.satelliteAnchors, dotR:1.3
       });
     } else {
       renderNetworkInBox(ctx, gridData[idx], boxCx, boxCy, halfSize, halfSize, {
@@ -696,14 +780,19 @@ window.addEventListener('resize', ()=>{
 // duplicating any geometry logic. ----
 class SVGRecorder {
   constructor(){
-    this.elements = [];
+    this.layerBuckets = {};   // layerName -> array of element strings
+    this.layer = 'misc';      // current layer, set by the drawing code via ctx.layer = '...'
     this._path = [];
     this._strokeStyle = '#000';
     this._fillStyle = '#000';
     this._lineWidth = 1;
     this._dash = [];
-    this._font = '10px Georgia';
+    this._font = "10px 'Test Pitch', Georgia, serif";
     this._fontSize = 10;
+  }
+  _push(str){
+    if (!this.layerBuckets[this.layer]) this.layerBuckets[this.layer] = [];
+    this.layerBuckets[this.layer].push(str);
   }
   set strokeStyle(v){ this._strokeStyle = v; }
   get strokeStyle(){ return this._strokeStyle; }
@@ -711,6 +800,8 @@ class SVGRecorder {
   get fillStyle(){ return this._fillStyle; }
   set lineWidth(v){ this._lineWidth = v; }
   get lineWidth(){ return this._lineWidth; }
+  set lineCap(v){ this._lineCap = v; }
+  get lineCap(){ return this._lineCap || 'butt'; }
   set font(v){
     this._font = v;
     const m = /([\d.]+)px/.exec(v);
@@ -732,19 +823,19 @@ class SVGRecorder {
   _dashAttr(){ return this._dash.length ? ` stroke-dasharray="${this._dash.join(',')}"` : ''; }
   stroke(){
     if (!this._path.length) return;
-    this.elements.push(`<path d="${this._path.join(' ')}" fill="none" stroke="${this._strokeStyle}" stroke-width="${this._lineWidth}"${this._dashAttr()} />`);
+    this._push(`<path d="${this._path.join(' ')}" fill="none" stroke="${this._strokeStyle}" stroke-width="${this._lineWidth}" stroke-linecap="${this.lineCap}"${this._dashAttr()} />`);
   }
   fill(){
     if (!this._path.length) return;
-    this.elements.push(`<path d="${this._path.join(' ')}" fill="${this._fillStyle}" stroke="none" />`);
+    this._push(`<path d="${this._path.join(' ')}" fill="${this._fillStyle}" stroke="none" />`);
   }
   fillRect(x,y,w,h){
-    this.elements.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${this._fillStyle}" />`);
+    this._push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${this._fillStyle}" />`);
   }
   clearRect(){ /* no-op: each export starts from a blank SVG */ }
   fillText(text,x,y){
     const esc = String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    this.elements.push(`<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" font-family="Georgia, 'Times New Roman', serif" font-size="${this._fontSize}" fill="${this._fillStyle}">${esc}</text>`);
+    this._push(`<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" font-family="'Test Pitch', Georgia, 'Times New Roman', serif" font-size="${this._fontSize}" fill="${this._fillStyle}">${esc}</text>`);
   }
 }
 
@@ -773,9 +864,28 @@ function exportPNG(){
 function exportSVG(){
   const rec = new SVGRecorder();
   renderSceneToContext(rec);
+  const layerOrder = [
+    'background', 'fills', 'outline', 'arcs', 'centerlines', 'planes',
+    'normals', 'edges', 'notes', 'userplane', 'vertices', 'labels', 'misc'
+  ];
+  const seen = new Set();
+  const groups = [];
+  for (const name of layerOrder){
+    const els = rec.layerBuckets[name];
+    if (els && els.length){
+      seen.add(name);
+      groups.push(`  <g id="${name}">\n    ${els.join('\n    ')}\n  </g>`);
+    }
+  }
+  // catch anything tagged with a layer name not in our known order
+  for (const name of Object.keys(rec.layerBuckets)){
+    if (seen.has(name)) continue;
+    const els = rec.layerBuckets[name];
+    if (els && els.length) groups.push(`  <g id="${name}">\n    ${els.join('\n    ')}\n  </g>`);
+  }
   const svg =
 `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}" width="${SIZE}" height="${SIZE}">
-${rec.elements.join('\n')}
+${groups.join('\n')}
 </svg>`;
   downloadBlob('circle-arrangement.svg', svg, 'image/svg+xml');
 }
@@ -889,8 +999,11 @@ document.getElementById('zoomOut').addEventListener('click', ()=>{ zoomLevel = M
 
 // ---- Drag-to-rotate, wheel/pinch-to-zoom ----
 const stage = document.getElementById('stage');
-let dragging = false, lastX = 0, lastY = 0;
-function pointerDown(x,y){ dragging = true; lastX = x; lastY = y; stage.classList.add('dragging'); }
+let dragging = false, lastX = 0, lastY = 0, downX = 0, downY = 0;
+let planeDrawMode = false;
+let planePoints = []; // angles (radians) around the S0 circumference, single-sphere mode only
+
+function pointerDown(x,y){ dragging = true; lastX = x; lastY = y; downX = x; downY = y; stage.classList.add('dragging'); }
 function pointerMove(x,y){
   if (!dragging) return;
   const dx = x - lastX, dy = y - lastY;
@@ -900,7 +1013,21 @@ function pointerMove(x,y){
   lastX = x; lastY = y;
   redraw();
 }
-function pointerUp(){ dragging = false; stage.classList.remove('dragging'); }
+function pointerUp(){
+  dragging = false;
+  stage.classList.remove('dragging');
+  if (planeDrawMode && sceneMode==='single'){
+    const moved = Math.hypot(lastX-downX, lastY-downY);
+    if (moved < 5) addPlanePointAtClient(lastX, lastY);
+  }
+}
+function addPlanePointAtClient(clientX, clientY){
+  const rect = document.getElementById('base').getBoundingClientRect();
+  const px = clientX - rect.left, py = clientY - rect.top;
+  const angle = Math.atan2(cy-py, px-cx);
+  planePoints.push(angle);
+  redraw();
+}
 
 stage.addEventListener('mousedown', e=>pointerDown(e.clientX,e.clientY));
 window.addEventListener('mousemove', e=>pointerMove(e.clientX,e.clientY));
@@ -939,6 +1066,33 @@ stage.addEventListener('touchend', ()=>{ pinchStartDist = null; });
 
 document.getElementById('exportPngBtn').addEventListener('click', exportPNG);
 document.getElementById('exportSvgBtn').addEventListener('click', exportSVG);
+document.getElementById('drawplanebtn').addEventListener('click', ()=>{
+  planeDrawMode = !planeDrawMode;
+  document.getElementById('drawplanebtn').textContent =
+    planeDrawMode ? 'Stop drawing plane' : 'Draw plane on S\u2080';
+});
+document.getElementById('clearplanebtn').addEventListener('click', ()=>{
+  planePoints = [];
+  redraw();
+});
+document.getElementById('solidlinesbtn').addEventListener('click', ()=>{
+  flagSolidLines = !flagSolidLines;
+  document.getElementById('solidlinesbtn').textContent =
+    flagSolidLines ? 'Restore dotted lines' : 'Make dotted lines solid gray';
+  redraw();
+});
+document.getElementById('hidecolorbtn').addEventListener('click', ()=>{
+  flagShowIntersectionColor = !flagShowIntersectionColor;
+  document.getElementById('hidecolorbtn').textContent =
+    flagShowIntersectionColor ? 'Hide intersection colors' : 'Show intersection colors';
+  redraw();
+});
+document.getElementById('centerlinesbtn').addEventListener('click', ()=>{
+  flagCenterLines = !flagCenterLines;
+  document.getElementById('centerlinesbtn').textContent =
+    flagCenterLines ? 'Hide center lines' : 'Show center lines';
+  redraw();
+});
 
 setupCanvas();
 updateControlAvailability();
