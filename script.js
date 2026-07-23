@@ -7,17 +7,22 @@ let flagSatellites = false;
 let flagSolidLines = false;
 let flagShowIntersectionColor = true;
 let flagCenterLines = true;
+let flagShowSphereOutline = true;
 let ctrlCircleCount = 6;
 let ctrlSphereCount = 6;
 let ctrlGridSize = 3;
 let ctrlPlaneDensity = 0.4;
 let ctrlSatelliteDensity = 0.6;
+let ctrlSatelliteScale = 1.0;
 let ctrlStrokeScale = 1.0;
 let ctrlRotateSpeed = 1.0;
+let ctrlVertexSize = 1.0;
 let flagBlurFills = false;
 let ctrlBlurAmount = 0.03;
 let gridContentMode = 'single';
 let flagRandomGrid = false;
+let flagCircleSpin = true; // whether circles precess on their own axes during animation
+let ctrlAspect = 'square'; // 'square' | '16:9'
 let zoomLevel = 1;
 const EPS = 6e-3;
 const YELLOW = '#F0DB3A';
@@ -34,11 +39,7 @@ const PAPER = '#FFFCF2';
 const SOLID_GRAY = '#9C948E';
 function inkA(a){ return `rgba(47,47,47,${a})`; }
 function LW(base){ return base * ctrlStrokeScale; }
-// Round-dot dashed style: a near-zero dash length with a round line cap draws
-// isolated circular dots rather than little dashes (dash:1 / gap:5 feel).
 function dotDash(gapUnits){ return flagSolidLines ? [] : [0.001, LW(gapUnits)]; }
-// When "solid lines" mode is on, anything that would have been dotted/dashed
-// is drawn as a plain solid gray stroke instead.
 function dashColor(normalColor){ return flagSolidLines ? SOLID_GRAY : normalColor; }
 
 function dot(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
@@ -111,9 +112,6 @@ function makeCircle(n,h,tag){
   };
 }
 
-// Advances one circle's own independent rotation -- its plane precesses
-// around its own random axis, so its intersections with other circles keep
-// shifting over time rather than staying frozen.
 function advanceCircleSpin(c, dt){
   c.spinAngle += c.spinSpeed * dt;
   c.n = rotateAroundAxis(c.origN, c.spinAxis, c.spinAngle);
@@ -129,9 +127,6 @@ function pointOnCircle(c, theta){
   return add(p1, add(p2,p3));
 }
 
-// Like circleIntersections, but also exposes the raw (possibly negative)
-// discriminant, so a highlight's opacity can be a smooth function of "how
-// close to intersecting" the pair currently is, rather than a hard yes/no.
 function circlePairInfo(c1,c2){
   const cc = dot(c1.n,c2.n);
   if (Math.abs(cc) > 0.999999) return {disc:-1, p1:null, p2:null};
@@ -208,11 +203,6 @@ function attachSatelliteData(vertexList){
   }
 }
 
-// Satellite anchors are sampled along the actual circumference of random
-// circles in the sphere -- spread out generally, not confined to the real
-// intersection points -- each carrying its own tiny circle arrangement.
-// Stored as (hostIdx, theta) rather than a fixed point, so the anchor stays
-// attached to its host circle even as that circle spins over time.
 function generateSatelliteAnchors(circleList, count){
   const anchors = [];
   if (!circleList.length) return anchors;
@@ -254,8 +244,6 @@ function shortArcThetas(t1,t2,n){
 }
 function yellowA(alpha, colorHex){ return hexToRgba(colorHex || YELLOW, alpha); }
 
-// Fills the true lens between two circles using both of their real intersection
-// points -- the actual overlap area, not an arbitrary sliver.
 function fillLensBetween(ctx, ocx,ocy,oR, rotFn, c1, c2, p1, p2, opacity, colorHex){
   const segs = 24;
   const t1a = thetaOf(c1,p1), t1b = thetaOf(c1,p2);
@@ -282,34 +270,26 @@ function fillTangentSpot(ctx, ocx,ocy,oR, rotFn, p3, opacity, colorHex){
   if (flagBlurFills) ctx.filter = 'none';
 }
 
-const HORIZON_EPS = 0.08; // shared by rendering and by the "is this actually visible" check
+const HORIZON_EPS = 0.08;
 
-// ---- Shared renderer: draws ONE sphere's full circle arrangement ----
 function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
   opts = opts || {};
   const rotFn = opts.rotate || (p=>p);
-  // Recomputed fresh every call so intersections track circles that are
-  // currently spinning, rather than a cached snapshot from generation time.
   const vertexList = opts.vertexList || computeVertexList(circleList);
   const highlightSet = opts.highlightSet || new Set();
   const highlightPairs = opts.highlightPairs || [];
+  const vDotR = (opts.dotR != null ? opts.dotR : 2.2) * ctrlVertexSize;
 
-  // Highlight fills first -- bottom layer.
   ctx.layer = 'fills';
   if (flagShowIntersectionColor){
-    // Satellites: static circles, so an index into the live vertexList is fine.
     vertexList.forEach((v, vi) => {
       if (!highlightSet.has(vi)) return;
       const p3 = rotFn(v.p3);
       if (p3[2] < 0) return;
       const partner = vertexList.find((w,wi)=> wi!==vi && w.i===v.i && w.j===v.j);
-      if (partner) fillLensBetween(ctx, ocx,ocy,oR, rotFn, circleList[v.i], circleList[v.j], v.p3, partner.p3, 1);
-      else fillTangentSpot(ctx, ocx,ocy,oR, rotFn, v.p3, 1);
+      if (partner) fillLensBetween(ctx, ocx,ocy,oR, rotFn, circleList[v.i], circleList[v.j], v.p3, partner.p3, 1, opts.highlightColor);
+      else fillTangentSpot(ctx, ocx,ocy,oR, rotFn, v.p3, 1, opts.highlightColor);
     });
-    // Animated pairs: drawn from their own tracked last-good points and a
-    // continuously-eased opacity, so they fade smoothly both through the
-    // moment the circles stop truly intersecting AND through the moment the
-    // point rotates behind the sphere's horizon -- no hard cutoffs.
     highlightPairs.forEach(hp => {
       if (!hp.p1) return;
       const p3 = rotFn(hp.p1);
@@ -321,13 +301,15 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
     });
   }
 
-  ctx.layer = 'outline';
-  ctx.beginPath();
-  ctx.arc(ocx,ocy,oR,0,2*Math.PI);
-  ctx.strokeStyle = INK;
-  ctx.lineWidth = LW(1.0);
-  ctx.setLineDash([]);
-  ctx.stroke();
+  if (flagShowSphereOutline){
+    ctx.layer = 'outline';
+    ctx.beginPath();
+    ctx.arc(ocx,ocy,oR,0,2*Math.PI);
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = LW(1.0);
+    ctx.setLineDash([]);
+    ctx.stroke();
+  }
 
   const N = opts.arcSamples || 220;
   const typeCounts = {normal:0, threaded:0, 'north-polar':0, 'south-polar':0, bipolar:0};
@@ -339,7 +321,7 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
     const isPolarish = (c.type==='north-polar' || c.type==='south-polar');
     let prev = null, prevZ = null;
     let runPts = [];
-    let runKey = null; // 'hidden' | 'threaded' | 'polar' | 'normal'
+    let runKey = null;
     const flushRun = () => {
       if (runPts.length < 2){ runPts = []; return; }
       const isDashedRun = runKey !== 'normal';
@@ -474,7 +456,7 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
 
     ctx.layer = 'vertices';
     ctx.beginPath();
-    ctx.arc(scr[0],scr[1], opts.dotR || 2.2, 0,2*Math.PI);
+    ctx.arc(scr[0],scr[1], vDotR, 0,2*Math.PI);
     ctx.fillStyle = INK;
     ctx.fill();
 
@@ -497,19 +479,18 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
       if (p3[2] < 0) return;
       const scr = proj(ocx,ocy,oR,p3);
       if (anchor.satCircles && anchor.satCircles.length){
-        const satR = oR * anchor.satRFrac;
+        const satR = oR * anchor.satRFrac * ctrlSatelliteScale;
         const satHighlight = (anchor.satHighlight != null) ? new Set([anchor.satHighlight]) : new Set();
         renderSphereView(ctx, scr[0], scr[1], satR, anchor.satCircles, {
           rotate: rotFn, showMeridian:false, arcSamples:50,
           showLabels:false, showVertexLabels:false, satellites:false,
-          vertexList: anchor.satVertices, highlightSet: satHighlight,
-          dotR: Math.max(1, (opts.dotR||2.2)*0.55)
+          vertexList: anchor.satVertices, highlightSet: satHighlight, highlightColor: opts.highlightColor,
+          dotR: Math.max(1, (opts.dotR!=null?opts.dotR:2.2)*0.55)
         });
       }
-      // center dot for the satellite, regardless of whether it sits on a real vertex
       ctx.layer = 'vertices';
       ctx.beginPath();
-      ctx.arc(scr[0],scr[1], (opts.dotR||2.2)*0.85, 0, 2*Math.PI);
+      ctx.arc(scr[0],scr[1], vDotR*0.85, 0, 2*Math.PI);
       ctx.fillStyle = INK;
       ctx.fill();
     });
@@ -537,7 +518,6 @@ function renderSphereView(ctx, ocx, ocy, oR, circleList, opts){
   return {typeCounts, totalSingular, tangentPairs};
 }
 
-// ---- Builders: pure data, reused by single mode, network mode, and grid cells ----
 function buildSingleArrangement(circleCount){
   const cs = [];
   for (let i=0;i<circleCount;i++) cs.push(makeCircle(randUnit(), randRange(-0.62,0.62)));
@@ -635,7 +615,7 @@ function buildNetworkArrangement(sphereCount){
     const info = circlePairInfo(localCircles[c.si][c.i], localCircles[c.si][c.j]);
     return c.z >= 0.6 && info.disc > FADE_EPS*3;
   });
-  const tierB = base.filter(c => c.z >= 0.3); // was c.z >= 0
+  const tierB = base.filter(c => c.z >= 0.3);
   let pool = tierA.length ? tierA : (tierB.length ? tierB : base);
   for (let k=pool.length-1;k>0;k--){
     const j = Math.floor(Math.random()*(k+1));
@@ -647,75 +627,6 @@ function buildNetworkArrangement(sphereCount){
     h.opacity = smoothstep(-FADE_EPS, FADE_EPS, info.disc);
   });
   return {spheres, localCircles, edges, centroid, highlightPairs, satelliteAnchorLists};
-}
-
-function animationTick(){
-  if (!flagAutoRotate) return;
-  const dt = ctrlRotateSpeed;
-  viewYaw += 0.0035 * dt;
-
-  if (sceneMode === 'single'){
-    circles.forEach((c, idx) => {
-      if (singleHighlightPair && (idx === singleHighlightPair.i || idx === singleHighlightPair.j)) return;
-      advanceCircleSpin(c, dt);
-    });
-    if (!singleHighlightPair) singleHighlightPair = pickHighlightCandidate(circles, rot);
-    updatePairOpacity(circles, singleHighlightPair);
-  } else if (sceneMode === 'network'){
-    netData.localCircles.forEach((cl, si) => {
-      const hp = netData.highlightPairs.find(h => h.si === si);
-      cl.forEach((c, idx) => {
-        if (hp && (idx === hp.i || idx === hp.j)) return;
-        advanceCircleSpin(c, dt);
-      });
-    });
-    for (let si=0; si<netData.localCircles.length; si++){
-      if (!netData.highlightPairs.some(hp => hp.si === si)){
-        const cand = pickHighlightCandidate(netData.localCircles[si], rot);
-        if (cand){ cand.si = si; netData.highlightPairs.push(cand); }
-      }
-    }
-    netData.highlightPairs.forEach(hp => updatePairOpacity(netData.localCircles[hp.si], hp));
-  } else if (sceneMode === 'grid'){
-    gridData.forEach(d=>{
-      d.spinYaw += d.spinSpeedYaw * dt;
-      d.spinPitch += d.spinSpeedPitch * dt;
-      const rfn = cellRotateFn(d);
-      if (gridContentMode === 'single'){
-        d.circles.forEach((c, idx) => {
-          if (d.highlightPair && (idx === d.highlightPair.i || idx === d.highlightPair.j)) return;
-          advanceCircleSpin(c, dt);
-        });
-        if (!d.highlightPair){
-          d.highlightPair = pickHighlightCandidate(d.circles, rfn);
-          if (d.highlightPair && d.cellColor) d.highlightPair.color = d.cellColor;
-        }
-        updatePairOpacity(d.circles, d.highlightPair);
-      } else {
-        d.localCircles.forEach((cl, si) => {
-          const hp = d.highlightPairs.find(h => h.si === si);
-          cl.forEach((c, idx) => {
-            if (hp && (idx === hp.i || idx === hp.j)) return;
-            advanceCircleSpin(c, dt);
-          });
-        });
-        for (let si=0; si<d.localCircles.length; si++){
-          if (!d.highlightPairs.some(hp => hp.si === si)){
-            const cand = pickHighlightCandidate(d.localCircles[si], rfn);
-            if (cand){
-              cand.si = si;
-              if (d.cellColor) cand.color = d.cellColor;
-              d.highlightPairs.push(cand);
-            }
-          }
-        }
-        d.highlightPairs.forEach(hp => updatePairOpacity(d.localCircles[hp.si], hp));
-      }
-    });
-  }
-
-  redraw();
-  autoRotateHandle = requestAnimationFrame(animationTick);
 }
 
 function renderNetworkInBox(ctx, data, boxCx, boxCy, boxHalfW, boxHalfH, opts){
@@ -760,7 +671,8 @@ function renderNetworkInBox(ctx, data, boxCx, boxCy, boxHalfW, boxHalfH, opts){
       satellites:flagSatellites, satelliteDensity:ctrlSatelliteDensity,
       highlightPairs:hpairs, satelliteAnchors:data.satelliteAnchorLists[i],
       label: opts.showLabels!==false ? ('S'+i) : null,
-      labelSize:opts.labelSize||11, dotR:opts.dotR||1.6, labelFontSize:opts.labelFontSize||8.5
+      labelSize:opts.labelSize||11, dotR:opts.dotR||1.6, labelFontSize:opts.labelFontSize||8.5,
+      highlightColor: data.cellColor
     });
     totals.singular += res.totalSingular;
     totals.tangent += res.tangentPairs;
@@ -771,11 +683,11 @@ function renderNetworkInBox(ctx, data, boxCx, boxCy, boxHalfW, boxHalfH, opts){
   return totals;
 }
 
-// ---- Single-sphere mode ----
-let SIZE = 640;
+let CW = 640, CH = 640;
 let cx = 320, cy = 320, baseR = 250;
 function recomputeDerivedSizes(){
-  cx = SIZE/2; cy = SIZE/2; baseR = SIZE*0.39;
+  cx = CW/2; cy = CH/2;
+  baseR = Math.min(CW,CH)*0.39;
 }
 let circles = [], notes = [], singleHighlightPair = null, singleSatelliteAnchors = [];
 
@@ -789,8 +701,8 @@ function generateSingle(){
 let staticAngle = 0;
 
 function drawSingle(ctx){
-  ctx.clearRect(0,0,SIZE,SIZE);
-  ctx.layer = 'background'; ctx.fillStyle = PAPER; ctx.fillRect(0,0,SIZE,SIZE);
+  ctx.clearRect(0,0,CW,CH);
+  ctx.layer = 'background'; ctx.fillStyle = PAPER; ctx.fillRect(0,0,CW,CH);
   ctx.lineCap = 'round';
 
   const R = baseR * zoomLevel;
@@ -849,7 +761,6 @@ tangent pairs (P2)  : ${result.tangentPairs}`;
     notes.map(n => '&middot; ' + n.label).join('<br>') || '&middot; no forced degeneracies this round';
 }
 
-// ---- Sphere network mode ----
 let netData = null;
 
 function generateNetwork(){
@@ -857,10 +768,10 @@ function generateNetwork(){
 }
 
 function drawNetwork(ctx){
-  ctx.clearRect(0,0,SIZE,SIZE);
-  ctx.layer = 'background'; ctx.fillStyle = PAPER; ctx.fillRect(0,0,SIZE,SIZE);
+  ctx.clearRect(0,0,CW,CH);
+  ctx.layer = 'background'; ctx.fillStyle = PAPER; ctx.fillRect(0,0,CW,CH);
   ctx.lineCap = 'round';
-  const totals = renderNetworkInBox(ctx, netData, cx, cy, SIZE*0.47, SIZE*0.47, {
+  const totals = renderNetworkInBox(ctx, netData, cx, cy, CW*0.47, CH*0.47, {
     arcSamples:150, showLabels:flagCircleLabels, showVertexLabels:flagVertexLabels, zoom:zoomLevel
   });
 
@@ -877,7 +788,6 @@ polar / bipolar       : ${totals.polar} / ${totals.bipolar}`;
     'Circle labels read "C\u2192S<i>k</i>": this sphere\u2019s intersection circle with neighbor S<i>k</i>. Dotted lines are the contact graph.';
 }
 
-// ---- Grid mode ----
 let gridData = [];
 
 function generateGrid(){
@@ -895,18 +805,16 @@ function generateGrid(){
     const d = (gridContentMode === 'single')
       ? buildSingleArrangement(cellCircleCount)
       : buildNetworkArrangement(cellSphereCount);
-    // Independent spin state so each cell can rotate on its own during animation,
-    // rather than every cell sharing the one global view rotation.
     d.spinYaw = 0;
     d.spinPitch = 0;
     d.spinSpeedYaw = randRange(0.003, 0.01) * (Math.random()<0.5?-1:1);
     d.spinSpeedPitch = randRange(-0.002, 0.002);
     if (flagRandomGrid){
-  const cellColor = pick(HIGHLIGHT_PALETTE);
-  d.cellColor = cellColor;
-  if (d.highlightPair) d.highlightPair.color = cellColor;
-  if (d.highlightPairs) d.highlightPairs.forEach(hp => { hp.color = cellColor; });
-}
+      const cellColor = pick(HIGHLIGHT_PALETTE);
+      d.cellColor = cellColor;
+      if (d.highlightPair) d.highlightPair.color = cellColor;
+      if (d.highlightPairs) d.highlightPairs.forEach(hp => { hp.color = cellColor; });
+    }
     gridData.push(d);
   }
 }
@@ -916,11 +824,11 @@ function cellRotateFn(d){
 }
 
 function drawGrid(ctx){
-  ctx.clearRect(0,0,SIZE,SIZE);
-  ctx.layer = 'background'; ctx.fillStyle = PAPER; ctx.fillRect(0,0,SIZE,SIZE);
+  ctx.clearRect(0,0,CW,CH);
+  ctx.layer = 'background'; ctx.fillStyle = PAPER; ctx.fillRect(0,0,CW,CH);
   ctx.lineCap = 'round';
   const n = ctrlGridSize;
-  const cellW = SIZE/n, cellH = SIZE/n;
+  const cellW = CW/n, cellH = CH/n;
   for (let idx=0; idx<gridData.length; idx++){
     const row = Math.floor(idx/n), col = idx % n;
     const boxCx = col*cellW + cellW/2;
@@ -934,7 +842,7 @@ function drawGrid(ctx){
         showPlanes:flagPlanes, showNormals:flagNormals, planeDensity:ctrlPlaneDensity,
         showLabels:flagCircleLabels, showVertexLabels:flagVertexLabels,
         satellites:flagSatellites, satelliteDensity:ctrlSatelliteDensity,
-        highlightPairs:hpairs, satelliteAnchors:d.satelliteAnchors, dotR:1.3
+        highlightPairs:hpairs, satelliteAnchors:d.satelliteAnchors, dotR:1.3, highlightColor:d.cellColor
       });
     } else {
       renderNetworkInBox(ctx, gridData[idx], boxCx, boxCy, halfSize, halfSize, {
@@ -950,26 +858,33 @@ content               : ${gridContentMode}`;
     'Each cell is an independent random arrangement, freshly generated.';
 }
 
-// ---- Canvas setup ----
 let mainCtx = null;
 function computeCanvasSize(){
-  const margin = 48; // top+bottom breathing room
+  const margin = 48;
   const availH = window.innerHeight - margin;
-  const availW = window.innerWidth - 300 - 24 - 32; // sidebar + gaps + page padding
-  return Math.max(360, Math.floor(Math.min(availH, availW)));
+  const availW = window.innerWidth - 300 - 24 - 32;
+  if (ctrlAspect === '16:9'){
+    let w = availW, h = Math.round(w*9/16);
+    if (h > availH){ h = availH; w = Math.round(h*16/9); }
+    w = Math.max(360, w); h = Math.max(203, h);
+    return {w: Math.floor(w), h: Math.floor(h)};
+  }
+  const s = Math.max(360, Math.floor(Math.min(availH, availW)));
+  return {w:s, h:s};
 }
 
 function setupCanvas(){
   const canvas = document.getElementById('base');
   const dpr = window.devicePixelRatio || 1;
-  SIZE = computeCanvasSize();
+  const size = computeCanvasSize();
+  CW = size.w; CH = size.h;
   recomputeDerivedSizes();
-  canvas.style.width = SIZE + 'px';
-  canvas.style.height = SIZE + 'px';
-  canvas.width = Math.round(SIZE*dpr);
-  canvas.height = Math.round(SIZE*dpr);
-  document.getElementById('stage').style.width = SIZE + 'px';
-  document.getElementById('stage').style.height = SIZE + 'px';
+  canvas.style.width = CW + 'px';
+  canvas.style.height = CH + 'px';
+  canvas.width = Math.round(CW*dpr);
+  canvas.height = Math.round(CH*dpr);
+  document.getElementById('stage').style.width = CW + 'px';
+  document.getElementById('stage').style.height = CH + 'px';
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr,0,0,dpr,0,0);
   mainCtx = ctx;
@@ -981,14 +896,11 @@ window.addEventListener('resize', ()=>{
   resizeTimer = setTimeout(()=>{ setupCanvas(); redraw(); }, 120);
 });
 
-// ---- SVG export: a fake "context" implementing only the canvas methods this
-// file actually uses, so the SAME drawing functions produce an SVG instead of
-// duplicating any geometry logic. ----
 class SVGRecorder {
   constructor(){
-    this.layerBuckets = {};   // layerName -> array of element strings
-    this.layer = 'misc';      // current layer, set by the drawing code via ctx.layer = '...'
-    this.filterDefs = {};     // stdDeviation -> filter id, so exports share one <filter> per blur amount
+    this.layerBuckets = {};
+    this.layer = 'misc';
+    this.filterDefs = {};
     this._filter = 'none';
     this._path = [];
     this._strokeStyle = '#000';
@@ -1026,15 +938,13 @@ class SVGRecorder {
     this._fontSize = m ? parseFloat(m[1]) : 10;
   }
   get font(){ return this._font; }
-  setTransform(){ /* no-op: SVG records logical coordinates directly */ }
+  setTransform(){ }
   setLineDash(arr){ this._dash = arr || []; }
   beginPath(){ this._path = []; }
   moveTo(x,y){ this._path.push(`M ${x.toFixed(2)} ${y.toFixed(2)}`); }
   lineTo(x,y){ this._path.push(`L ${x.toFixed(2)} ${y.toFixed(2)}`); }
   closePath(){ this._path.push('Z'); }
   arc(x,y,r,a0,a1){
-    // Every arc() call in this file draws a full circle (0..2*PI); represent
-    // it as two half-circle SVG arcs, which SVG paths require for a full loop.
     const x0 = x-r, x1 = x+r;
     this._path.push(`M ${x0.toFixed(2)} ${y.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${x1.toFixed(2)} ${y.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${x0.toFixed(2)} ${y.toFixed(2)}`);
   }
@@ -1050,7 +960,7 @@ class SVGRecorder {
   fillRect(x,y,w,h){
     this._push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${this._fillStyle}" />`);
   }
-  clearRect(){ /* no-op: each export starts from a blank SVG */ }
+  clearRect(){ }
   fillText(text,x,y){
     const esc = String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     this._push(`<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" font-family="'Test Pitch', Georgia, 'Times New Roman', serif" font-size="${this._fontSize}" fill="${this._fillStyle}">${esc}</text>`);
@@ -1095,7 +1005,6 @@ function exportSVG(){
       groups.push(`  <g id="${name}">\n    ${els.join('\n    ')}\n  </g>`);
     }
   }
-  // catch anything tagged with a layer name not in our known order
   for (const name of Object.keys(rec.layerBuckets)){
     if (seen.has(name)) continue;
     const els = rec.layerBuckets[name];
@@ -1106,7 +1015,7 @@ function exportSVG(){
   );
   const defs = defsParts.length ? `  <defs>\n    ${defsParts.join('\n    ')}\n  </defs>\n` : '';
   const svg =
-`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}" width="${SIZE}" height="${SIZE}">
+`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${CW} ${CH}" width="${CW}" height="${CH}">
 ${defs}${groups.join('\n')}
 </svg>`;
   downloadBlob('circle-arrangement.svg', svg, 'image/svg+xml');
@@ -1133,8 +1042,6 @@ let flagAutoRotate = false;
 let autoRotateHandle = null;
 
 const FADE_EPS = 0.15;
-// How long a highlight can sit at (near) zero fill opacity before we give up
-// on it and hunt for a fresh intersection to highlight instead.
 
 function pickHighlightCandidate(circleList, rotateFn){
   rotateFn = rotateFn || rot;
@@ -1145,11 +1052,6 @@ function pickHighlightCandidate(circleList, rotateFn){
     !vl[i].tangent && Math.abs(dot(circleList[vl[i].i].n, circleList[vl[i].j].n)) < NEAR_PARALLEL
   );
   const baseIdxs = stable.length ? stable : vl.map((v,i)=>i);
-  // Rank by how comfortably each candidate currently faces the camera and
-  // take the best one, rather than filtering by a fixed margin -- a fixed
-  // margin can leave the pool empty (and the cell blank) for as long as
-  // nothing happens to clear it. Picking the best available guarantees an
-  // immediate, front-facing choice every time.
   const ranked = baseIdxs.slice().sort((a,b) => rotateFn(vl[b].p3)[2] - rotateFn(vl[a].p3)[2]);
   const topCount = Math.max(1, Math.min(3, ranked.length));
   const chosenIdx = ranked[Math.floor(Math.random()*topCount)];
@@ -1160,7 +1062,16 @@ function pickHighlightCandidate(circleList, rotateFn){
   return {i:chosen.i, j:chosen.j, opacity:initialOpacity, p1:chosen.p3, p2: partner?partner.p3:null};
 }
 
-function updatePairOpacity(circleListForPair, pairObj){
+const MAX_INVISIBLE_MS = 500;
+
+function effectiveVisibility(pairObj, rotateFn){
+  if (!pairObj || !pairObj.p1) return 0;
+  const z = rotateFn(pairObj.p1)[2];
+  const depthFade = smoothstep(-HORIZON_EPS, HORIZON_EPS, z);
+  return pairObj.opacity * depthFade;
+}
+
+function updatePairOpacity(circleListForPair, pairObj, rotateFn, now){
   if (!pairObj) return;
   const c1 = circleListForPair[pairObj.i], c2 = circleListForPair[pairObj.j];
   if (!c1 || !c2){ pairObj.opacity = 0; return; }
@@ -1168,51 +1079,75 @@ function updatePairOpacity(circleListForPair, pairObj){
   const target = smoothstep(-FADE_EPS, FADE_EPS, info.disc);
   pairObj.opacity += (target - pairObj.opacity) * 0.18;
   if (info.p1){ pairObj.p1 = info.p1; pairObj.p2 = info.p2; }
+
+  const visible = effectiveVisibility(pairObj, rotateFn || rot) > 0.05;
+  if (visible){
+    pairObj.invisibleSince = null;
+  } else {
+    if (pairObj.invisibleSince == null) pairObj.invisibleSince = now;
+    else if (now - pairObj.invisibleSince > MAX_INVISIBLE_MS){
+      const fresh = pickHighlightCandidate(circleListForPair, rotateFn || rot);
+      if (fresh){
+        pairObj.i = fresh.i; pairObj.j = fresh.j;
+        pairObj.p1 = fresh.p1; pairObj.p2 = fresh.p2;
+        pairObj.opacity = 0; // always fade in from nothing, never pop to the target value
+        pairObj.invisibleSince = null;
+      }
+    }
+  }
 }
 
 function animationTick(){
   if (!flagAutoRotate) return;
   const dt = ctrlRotateSpeed;
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   viewYaw += 0.0035 * dt;
 
   if (sceneMode === 'single'){
-    circles.forEach(c => advanceCircleSpin(c, dt));
-    if (!singleHighlightPair) singleHighlightPair = pickHighlightCandidate(circles, rot);
-    updatePairOpacity(circles, singleHighlightPair);
+    if (flagCircleSpin) circles.forEach(c => advanceCircleSpin(c, dt));
+    if (!singleHighlightPair){
+      singleHighlightPair = pickHighlightCandidate(circles, rot);
+      if (singleHighlightPair) singleHighlightPair.opacity = 0;
+    }
+    updatePairOpacity(circles, singleHighlightPair, rot, now);
   } else if (sceneMode === 'network'){
-    netData.localCircles.forEach(cl => cl.forEach(c => advanceCircleSpin(c, dt)));
+    if (flagCircleSpin) netData.localCircles.forEach(cl => cl.forEach(c => advanceCircleSpin(c, dt)));
     for (let si=0; si<netData.localCircles.length; si++){
       if (!netData.highlightPairs.some(hp => hp.si === si)){
         const cand = pickHighlightCandidate(netData.localCircles[si], rot);
-        if (cand){ cand.si = si; netData.highlightPairs.push(cand); }
+        if (cand){ cand.si = si; cand.opacity = 0; netData.highlightPairs.push(cand); }
       }
     }
-    netData.highlightPairs.forEach(hp => updatePairOpacity(netData.localCircles[hp.si], hp));
+    netData.highlightPairs.forEach(hp => updatePairOpacity(netData.localCircles[hp.si], hp, rot, now));
   } else if (sceneMode === 'grid'){
     gridData.forEach(d=>{
       d.spinYaw += d.spinSpeedYaw * dt;
       d.spinPitch += d.spinSpeedPitch * dt;
       const rfn = cellRotateFn(d);
       if (gridContentMode === 'single'){
-        d.circles.forEach(c => advanceCircleSpin(c, dt));
+        if (flagCircleSpin) d.circles.forEach(c => advanceCircleSpin(c, dt));
         if (!d.highlightPair){
           d.highlightPair = pickHighlightCandidate(d.circles, rfn);
-          if (d.highlightPair && d.cellColor) d.highlightPair.color = d.cellColor;
+          if (d.highlightPair){
+            d.highlightPair.opacity = 0;
+            if (d.cellColor) d.highlightPair.color = d.cellColor;
+          }
         }
-        updatePairOpacity(d.circles, d.highlightPair);
+        updatePairOpacity(d.circles, d.highlightPair, rfn, now);
       } else {
-        d.localCircles.forEach(cl => cl.forEach(c => advanceCircleSpin(c, dt)));
+        if (flagCircleSpin) d.localCircles.forEach(cl => cl.forEach(c => advanceCircleSpin(c, dt)));
         for (let si=0; si<d.localCircles.length; si++){
           if (!d.highlightPairs.some(hp => hp.si === si)){
             const cand = pickHighlightCandidate(d.localCircles[si], rfn);
             if (cand){
               cand.si = si;
+              cand.opacity = 0;
               if (d.cellColor) cand.color = d.cellColor;
               d.highlightPairs.push(cand);
             }
           }
         }
-        d.highlightPairs.forEach(hp => updatePairOpacity(d.localCircles[hp.si], hp));
+        d.highlightPairs.forEach(hp => updatePairOpacity(d.localCircles[hp.si], hp, rfn, now));
       }
     });
   }
@@ -1319,6 +1254,12 @@ document.getElementById('sliderSatDensity').addEventListener('input', (e)=>{
   document.getElementById('lblSatDensity').textContent = pct+'%';
   redraw();
 });
+document.getElementById('sliderSatScale').addEventListener('input', (e)=>{
+  const pct = parseInt(e.target.value,10);
+  ctrlSatelliteScale = pct/100;
+  document.getElementById('lblSatScale').textContent = pct+'%';
+  redraw();
+});
 document.getElementById('sliderStrokeWidth').addEventListener('input', (e)=>{
   const pct = parseInt(e.target.value,10);
   ctrlStrokeScale = pct/100;
@@ -1329,6 +1270,24 @@ document.getElementById('sliderRotateSpeed').addEventListener('input', (e)=>{
   const pct = parseInt(e.target.value,10);
   ctrlRotateSpeed = pct/100;
   document.getElementById('lblRotateSpeed').textContent = pct+'%';
+});
+document.getElementById('sliderVertexSize').addEventListener('input', (e)=>{
+  const pct = parseInt(e.target.value,10);
+  ctrlVertexSize = pct/100;
+  document.getElementById('lblVertexSize').textContent = pct+'%';
+  redraw();
+});
+document.getElementById('circlespinbtn').addEventListener('click', ()=>{
+  flagCircleSpin = !flagCircleSpin;
+  document.getElementById('circlespinbtn').textContent =
+    flagCircleSpin ? 'Freeze circle rotation' : 'Circles spin independently';
+});
+document.getElementById('aspectbtn').addEventListener('click', ()=>{
+  ctrlAspect = (ctrlAspect === 'square') ? '16:9' : 'square';
+  document.getElementById('aspectbtn').textContent =
+    ctrlAspect === '16:9' ? 'Canvas: square' : 'Canvas: 16:9';
+  setupCanvas();
+  redraw();
 });
 document.getElementById('blurbtn').addEventListener('click', ()=>{
   flagBlurFills = !flagBlurFills;
@@ -1350,11 +1309,10 @@ document.getElementById('autorotatebtn').addEventListener('click', ()=>{
     flagAutoRotate ? 'Stop rotation' : 'Start rotation';
 });
 
-// ---- Drag-to-rotate, wheel/pinch-to-zoom ----
 const stage = document.getElementById('stage');
 let dragging = false, lastX = 0, lastY = 0, downX = 0, downY = 0;
 let planeDrawMode = false;
-let planePoints = []; // angles (radians) around the S0 circumference, single-sphere mode only
+let planePoints = [];
 
 function pointerDown(x,y){
   dragging = true; lastX = x; lastY = y; downX = x; downY = y; stage.classList.add('dragging');
@@ -1450,6 +1408,12 @@ document.getElementById('centerlinesbtn').addEventListener('click', ()=>{
   flagCenterLines = !flagCenterLines;
   document.getElementById('centerlinesbtn').textContent =
     flagCenterLines ? 'Hide center lines' : 'Show center lines';
+  redraw();
+});
+document.getElementById('sphereoutlinebtn').addEventListener('click', ()=>{
+  flagShowSphereOutline = !flagShowSphereOutline;
+  document.getElementById('sphereoutlinebtn').textContent =
+    flagShowSphereOutline ? 'Hide sphere boundary' : 'Show sphere boundary';
   redraw();
 });
 

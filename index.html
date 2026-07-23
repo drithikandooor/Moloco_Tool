@@ -33,7 +33,7 @@
       </div>
       <div class="row">
         <label>Grid size: <span id="lblGridSize">3&times;3</span>
-          <input type="range" id="sliderGridSize" min="1" max="20" value="3" step="1">
+          <input type="range" id="sliderGridSize" min="1" max="20" value="3" step="1"></label>
       </div>
     </div>
 
@@ -42,9 +42,11 @@
       <div class="ctrlbtns">
         <button id="zoomIn">Zoom +</button>
         <button id="zoomOut">Zoom &minus;</button>
+        <button id="aspectbtn">Canvas: 16:9</button>
       </div>
       <div class="ctrlbtns">
         <button id="autorotatebtn">Start rotation</button>
+        <button id="circlespinbtn">Freeze circle rotation</button>
       </div>
       <div class="row">
         <label>Rotation speed: <span id="lblRotateSpeed">100%</span>
@@ -60,6 +62,7 @@
       </div>
       <div class="ctrlbtns">
         <button id="centerlinesbtn">Hide center lines</button>
+        <button id="sphereoutlinebtn">Hide sphere boundary</button>
       </div>
       <div class="ctrlbtns">
         <button id="solidlinesbtn">Make dotted lines solid gray</button>
@@ -67,6 +70,10 @@
       <div class="row">
         <label>Stroke width: <span id="lblStrokeWidth">100%</span>
           <input type="range" id="sliderStrokeWidth" min="20" max="200" value="100"></label>
+      </div>
+      <div class="row">
+        <label>Vertex point size: <span id="lblVertexSize">100%</span>
+          <input type="range" id="sliderVertexSize" min="30" max="300" value="100"></label>
       </div>
     </div>
 
@@ -88,6 +95,10 @@
       <div class="row">
         <label>Satellite density: <span id="lblSatDensity">60%</span>
           <input type="range" id="sliderSatDensity" min="0" max="100" value="60"></label>
+      </div>
+      <div class="row">
+        <label>Satellite scale: <span id="lblSatScale">100%</span>
+          <input type="range" id="sliderSatScale" min="20" max="300" value="100"></label>
       </div>
     </div>
 
