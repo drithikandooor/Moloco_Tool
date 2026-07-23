@@ -25,8 +25,8 @@ let flagCircleSpin = true; // whether circles precess on their own axes during a
 let ctrlAspect = 'square'; // 'square' | '16:9'
 let zoomLevel = 1;
 const EPS = 6e-3;
-const YELLOW = '#F0DB3A';
-const HIGHLIGHT_PALETTE = ['#F0DB3A', '#EDA946', '#A6D6FC', '#C3E36B'];
+const YELLOW = '#FFEF7B';
+const HIGHLIGHT_PALETTE = ['#FFEF7B', '#BCE1FF', '#E0FF8D'];
 function hexToRgba(hex, alpha){
   const h = hex.replace('#','');
   const r = parseInt(h.substring(0,2),16);
